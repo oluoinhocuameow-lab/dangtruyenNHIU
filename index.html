@@ -184,17 +184,27 @@
       <div class="ms-row" style="margin:12px 0">
         <button type="button" class="ms-btn" id="msInlineAddChapter">＋ Thêm chương mới</button>
         <button type="button" class="ms-btn" id="msSaveAllChapters">💾 Lưu tất cả chương</button>
-        <button type="button" class="ms-btn alt" id="msExportChaptersHTML">📥 Xuất file chương (HTML)</button>
         <button type="button" class="ms-btn alt" id="msExportChaptersJSON">🛟 Sao lưu chương (JSON)</button>
         <span class="ms-pill" id="msInlineChapterCount">0 chương</span>
       </div>
       <div id="msInlineChapterList" class="ms-inline-list">
         <div class="ms-inline-empty">🐾 Hãy chọn một truyện để xem danh sách chương.</div>
       </div>
+      <div class="ms-inline-item" id="msExportPanel" style="margin-top:14px">
+        <div class="ms-title">📦 Xuất truyện thành file HTML</div>
+        <div class="ms-note" style="margin-bottom:9px">File xuất gồm tên truyện, tác giả, ảnh bìa, văn án và nội dung chương. Chọn từng chương (giữ Ctrl/Command để chọn nhiều) hoặc xuất tất cả.</div>
+        <div class="ms-field"><label for="msExportChapterSelect">Chọn chương muốn xuất</label><select id="msExportChapterSelect" multiple size="7" style="min-height:150px"></select></div>
+        <div class="ms-row">
+          <button type="button" class="ms-btn" id="msExportSelectedHTML">📥 Xuất chương đã chọn</button>
+          <button type="button" class="ms-btn alt" id="msExportAllHTML">📚 Xuất tất cả chương</button>
+          <button type="button" class="ms-btn alt" id="msExportRefresh">↻ Cập nhật danh sách</button>
+        </div>
+        <div class="ms-note" id="msExportHint">Chọn truyện để tải danh sách chương.</div>
+      </div>
     </div>
 
     <div class="ms-card">
-      <div class="ms-title">04. 🐾 Trạng thái đồng bộ</div>
+      <div class="ms-title">05. 🐾 Trạng thái đồng bộ</div>
       <div class="ms-status" id="msMessage">Chưa kết nối.</div>
       <div class="ms-pill">Firebase Realtime Database · Cache bật ⚡ · Thể loại + trạng thái đồng bộ</div>
       <p class="ms-note">Dữ liệu truyện: stories/{storyId}/info<br>Dữ liệu chương: stories/{storyId}/chapters/{chapterId}<br>Thể loại dùng chung với Đăng truyện: settings/tags<br>Trạng thái dùng chung với Đăng truyện: info.status (Đang ra / Hoàn thành / Drop)<br>ID chương số là ID được dùng để hiển thị số chương.</p>
@@ -836,6 +846,7 @@ function renderInlineChapterCards() {
       <div class="ms-inline-meta"><span class="ms-note">${ch.vip ? "🔒 VIP" : "📖 Thường"} · ${Number(ch.wordCount)||0} chữ</span><button type="button" class="ms-btn alt ms-inline-delete">Xóa chương</button></div>
     </section>`;
   }).join("");
+  if (typeof msRefreshExportOptions === "function") msRefreshExportOptions();
 }
 async function saveAllInlineChapters() {
   if (busy) return;
@@ -933,69 +944,59 @@ $("msInlineChapterList").addEventListener("click", async e => {
 });
 $("msSaveAllChapters").addEventListener("click", saveAllInlineChapters);
 
-/* XUẤT CHƯƠNG CỦA TRUYỆN ĐANG CHỌN — chỉ đọc, không ghi/xóa Firebase. */
+/* XUẤT TRUYỆN: gồm văn án và chương được chọn hoặc toàn bộ. Chỉ đọc dữ liệu. */
 function msSafeFileName(value) {
-  return String(value || "truyen")
-    .normalize("NFD").replace(/[\\u0300-\\u036f]/g, "")
-    .replace(/đ/g, "d").replace(/Đ/g, "d")
-    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+  return String(value || "truyen").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d").replace(/Đ/g, "d").replace(/[^a-zA-Z0-9_-]+/g, "_")
     .replace(/^_+|_+$/g, "").slice(0, 70) || "truyen";
 }
 function msGetExportChapters() {
-  if (!currentStoryId) {
-    alert("Bà hãy chọn truyện cần xuất trước nha 💗");
-    return null;
-  }
-  const cards = [...$("msInlineChapterList").querySelectorAll("[data-inline-chapter]")];
-  const chapters = {};
+  if (!currentStoryId) { alert("Bà hãy chọn truyện cần xuất trước nha 💗"); return null; }
+  const cards = [...$("msInlineChapterList").querySelectorAll("[data-inline-chapter]")], chapters = {};
   for (const card of cards) {
-    const id = String(card.dataset.inlineChapter);
-    const old = chapterCache[id] || {};
-    const editor = card.querySelector(".ms-inline-content");
-    const plain = (editor?.innerText || "").replace(/\\u00a0/g, " ").trim();
-    chapters[id] = {
-      ...old,
-      title: card.querySelector(".ms-inline-title")?.value ?? old.title ?? "",
+    const id = String(card.dataset.inlineChapter), old = chapterCache[id] || {}, editor = card.querySelector(".ms-inline-content");
+    const plain = (editor?.innerText || "").replace(/\u00a0/g, " ").trim();
+    chapters[id] = { ...old, title: card.querySelector(".ms-inline-title")?.value ?? old.title ?? "",
       content: editor ? editor.innerHTML : (old.content || old.text || old.body || ""),
       price: Math.max(0, Number(card.querySelector(".ms-inline-price")?.value ?? old.price ?? 0) || 0),
-      wordCount: plain ? plain.split(/\\s+/u).filter(Boolean).length : (Number(old.wordCount) || 0)
-    };
+      wordCount: plain ? plain.split(/\s+/u).filter(Boolean).length : (Number(old.wordCount) || 0) };
   }
-  // Nếu giao diện chưa dựng card, vẫn xuất toàn bộ dữ liệu chương đã tải.
   if (!cards.length) Object.assign(chapters, chapterCache || {});
   return chapters;
 }
 function msDownloadText(filename, content, mime) {
-  const blob = new Blob([content], {type: mime + ";charset=utf-8"});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
+  const blob = new Blob([content], {type: mime + ";charset=utf-8"}), url = URL.createObjectURL(blob), a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
-$("msExportChaptersHTML").addEventListener("click", () => {
+function msRefreshExportOptions() {
+  const select = $("msExportChapterSelect"); if (!select) return;
+  if (!currentStoryId) { select.innerHTML = ""; $("msExportHint").textContent = "Chọn truyện để tải danh sách chương."; return; }
   const chapters = msGetExportChapters();
-  if (!chapters) return;
-  const ids = Object.keys(chapters).sort((a,b) => {
-    const na=Number(a), nb=Number(b);
-    return Number.isFinite(na)&&Number.isFinite(nb) ? na-nb : a.localeCompare(b);
-  });
-  if (!ids.length) { alert("Truyện này chưa có chương để xuất nha."); return; }
-  const storyName = $("msName").value.trim() || currentStoryId;
+  if (!chapters) { select.innerHTML = ""; $("msExportHint").textContent = "Chọn truyện để tải danh sách chương."; return; }
+  const ids = Object.keys(chapters).sort((a,b) => /^\d+$/.test(a) && /^\d+$/.test(b) ? Number(a)-Number(b) : a.localeCompare(b));
+  select.innerHTML = "";
+  ids.forEach(id => { const option = document.createElement("option"), ch = chapters[id] || {}; option.value = id; option.textContent = "Chương " + id + (ch.title ? ": " + ch.title : ""); select.appendChild(option); });
+  $("msExportHint").textContent = ids.length ? "Có " + ids.length + " chương. Có thể chọn một hoặc nhiều chương để xuất." : "Truyện chưa có chương.";
+}
+function msExportStoryHTML(chosenIds) {
+  const chapters = msGetExportChapters(); if (!chapters) return;
+  const allIds = Object.keys(chapters).sort((a,b) => /^\d+$/.test(a) && /^\d+$/.test(b) ? Number(a)-Number(b) : a.localeCompare(b));
+  const ids = chosenIds ? allIds.filter(id => chosenIds.includes(id)) : allIds;
+  if (!ids.length) { alert(chosenIds ? "Bà hãy chọn ít nhất một chương nha 💗" : "Truyện này chưa có chương để xuất nha."); return; }
   const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  const sections = ids.map(id => {
-    const ch = chapters[id] || {};
-    const body = ch.content ?? ch.contentHtml ?? ch.contentHTML ?? ch.html ??
-      ch.text ?? ch.body ?? ch.rawContent ?? ch.chapterContent ?? "";
+  const storyName = $("msName").value.trim() || currentStoryId, author = $("msAuthor").value.trim(), summary = $("msSummary").value.trim(), cover = coverData || $("msCover").value.trim();
+  const sections = ids.map(id => { const ch = chapters[id] || {}, body = ch.content ?? ch.contentHtml ?? ch.contentHTML ?? ch.html ?? ch.text ?? ch.body ?? ch.rawContent ?? ch.chapterContent ?? "";
     return `<section class="chapter"><h2>Chương ${esc(id)}${ch.title ? " — " + esc(ch.title) : ""}</h2><div class="content">${typeof body === "string" ? body : esc(JSON.stringify(body))}</div></section>`;
-  }).join("\\n");
-  const html = `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(storyName)}</title><style>body{font-family:Arial,sans-serif;max-width:850px;margin:30px auto;padding:0 18px;line-height:1.85;color:#302735}h1{text-align:center;color:#b34f87}.chapter{padding:20px 0;border-bottom:1px solid #ead9e5;break-inside:avoid}.chapter h2{color:#a34d86}.content{white-space:normal;overflow-wrap:anywhere}.content img{max-width:100%;height:auto;border-radius:8px}.content p{margin:0 0 1em}</style></head><body><h1>${esc(storyName)}</h1><p style="text-align:center">Mã truyện: ${esc(currentStoryId)} · ${ids.length} chương</p>${sections}</body></html>`;
-  msDownloadText(msSafeFileName(storyName) + "_tat_ca_chuong.html", html, "text/html");
-  message("Đã xuất " + ids.length + " chương thành file HTML. Dữ liệu Firebase không bị thay đổi 💗");
-});
+  }).join("\n");
+  const coverBlock = cover ? `<img class="cover" src="${esc(cover)}" alt="Bìa ${esc(storyName)}">` : "";
+  const html = `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(storyName)}</title><style>body{font-family:Arial,sans-serif;max-width:850px;margin:30px auto;padding:0 18px;line-height:1.85;color:#302735}h1{text-align:center;color:#b34f87}.intro{text-align:center;margin:0 auto 28px}.cover{display:block;max-width:220px;max-height:320px;object-fit:contain;margin:0 auto 18px;border-radius:10px}.synopsis{white-space:pre-wrap;text-align:left;background:#fff7fb;padding:16px;border-radius:12px}.chapter{padding:20px 0;border-bottom:1px solid #ead9e5;break-inside:avoid}.chapter h2{color:#a34d86}.content{white-space:normal;overflow-wrap:anywhere}.content img{max-width:100%;height:auto;border-radius:8px}.content p{margin:0 0 1em}</style></head><body><header class="intro">${coverBlock}<h1>${esc(storyName)}</h1><p>${author ? "Tác giả: " + esc(author) + " · " : ""}Mã truyện: ${esc(currentStoryId)} · ${ids.length} chương</p></header>${summary ? `<section><h2>Văn án / Giới thiệu</h2><div class="synopsis">${esc(summary)}</div></section>` : ""}${sections}</body></html>`;
+  msDownloadText(msSafeFileName(storyName) + (chosenIds ? "_chuong_da_chon" : "_toan_bo_truyen") + ".html", html, "text/html");
+  message("Đã xuất " + ids.length + " chương kèm thông tin truyện và văn án. Dữ liệu Firebase không bị thay đổi 💗");
+}
+$("msExportSelectedHTML").addEventListener("click", () => msExportStoryHTML([...$("msExportChapterSelect").selectedOptions].map(o => o.value)));
+$("msExportAllHTML").addEventListener("click", () => msExportStoryHTML(null));
+$("msExportRefresh").addEventListener("click", msRefreshExportOptions);
+
 $("msExportChaptersJSON").addEventListener("click", () => {
   const chapters = msGetExportChapters();
   if (!chapters) return;
